@@ -33,6 +33,8 @@ sudo apt install -y locales
 sudo locale-gen en_US en_US.UTF-8
 sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 export LANG=en_US.UTF-8
+echo "export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST" >> ~/.bashrc
+echo "export ROS_STATIC_PEERS='192.168.0.1;remote.com'" >> ~/.bashrc
 
 # -----------------------------
 # Base Development Utilities
