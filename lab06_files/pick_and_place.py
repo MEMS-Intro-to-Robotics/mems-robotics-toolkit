@@ -63,7 +63,7 @@ class PickAndPlaceNode(Node):
             self.gripper = None
 
         # --- Scene and Pose Definitions ---
-        table_z = -0.026
+        table_z = -0.0001
         block_size = 0.04
         self.table_center_z = table_z - 0.05/2.0
         self.block_center_z = table_z + block_size/2.0
