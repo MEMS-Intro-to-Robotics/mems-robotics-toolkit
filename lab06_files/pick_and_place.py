@@ -1,36 +1,45 @@
 #!/usr/bin/env python3
 """
-Lab 6 — Pick & Place (Kinova Gen3 Lite)
+Lab 6 — Pick & Place (Kinova Gen3 Lite) - Student Version
+
+This script provides a basic "pick and place" task where the robot
+picks up a block, lifts it, and places it back in the same spot.
+
+You can extend this to stack blocks in different locations.
 
 Quick start:
+  # First, in a new terminal, add the scene
   ros2 run lab06_moveit pick_and_place --ros-args -p task:=add_scene
+
+  # Then, run the main task
+  ros2 run lab06_moveit pick_and_place --ros-args -p task:=pick_place_one
 """
-
-import threading
 import time
-from typing import Tuple
-
+import threading
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
-
 from geometry_msgs.msg import Pose
+
 from pymoveit2 import MoveIt2
 from pymoveit2.gripper_interface import GripperInterface
 
-
-def make_pose(x: float, y: float, z: float) -> Pose:
+# Reusable function to create a Pose message
+def make_pose(x, y, z, qx, qy, qz, qw) -> Pose:
     p = Pose()
     p.position.x, p.position.y, p.position.z = x, y, z
-    p.orientation.w = 1.0  # identity quat
+    p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = qx, qy, qz, qw
     return p
 
 
 class PickAndPlaceNode(Node):
     def __init__(self):
-        super().__init__("pick_and_place_node")
+        super().__init__("pick_and_place")
 
-        # -------------------- MoveIt 2 (pymoveit2) --------------------
+        # Declare a ROS parameter for the task to be performed
+        self.declare_parameter("task", "home")
+
+        # --- Robot Configuration ---
         self.moveit2 = MoveIt2(
             node=self,
             joint_names=["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"],
@@ -39,174 +48,174 @@ class PickAndPlaceNode(Node):
             group_name="arm",
         )
 
-        # -------------------- Gripper (pymoveit2) ---------------------
         try:
             self.gripper = GripperInterface(
                 node=self,
                 gripper_joint_names=["right_finger_bottom_joint"],
-                open_gripper_joint_positions=[0.8],
-                closed_gripper_joint_positions=[0.0],
+                open_gripper_joint_positions=[0.80],
+                closed_gripper_joint_positions=[0.01],
                 gripper_group_name="gripper",
                 gripper_command_action_name="/gen3_lite_2f_gripper_controller/gripper_cmd",
+                ignore_new_calls_while_executing=True,
             )
         except Exception as e:
-            self.get_logger().warn(f"GripperInterface init failed ({e}); gripper actions skipped.")
+            self.get_logger().warn(f"GripperInterface initialization failed: {e}")
             self.gripper = None
 
-        # -------------------- Parameters (CLI-controlled) --------------
-        self.declare_parameter("task", "none")
-        self.declare_parameter("target_id", "block_1")
-        self.declare_parameter("clear_on_start", False)
+        # --- Scene and Pose Definitions ---
+        table_z = -0.026
+        block_size = 0.04
+        self.table_center_z = table_z - 0.05/2.0
+        self.block_center_z = table_z + block_size/2.0
 
+        block_x = 0.45
+        self.blocks_xyz = [
+            (block_x, -0.08, self.block_center_z),
+            (block_x,  0.00, self.block_center_z),
+            (block_x,  0.08, self.block_center_z),
+        ]
 
-        # Joint presets
-        self.joint_home = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        self.joint_retract = [0.0, -1.2, 1.4, 0.0, 1.1, 0.0]
+        self.approach_height = 0.32
+        self.grasp_height = 0.19
+        self.top_down_orientation = (-0.7071, 0.7071, 0.0, 0.0)
 
-    # ==================== Utilities ====================
+        # --- Define Poses for the Pick and Place Task ---
+        # 1. Poses for picking up the first block
+        pick_xyz = self.blocks_xyz[0]
+        self.pre_grasp_pose = make_pose(pick_xyz[0], pick_xyz[1], self.approach_height, *self.top_down_orientation)
+        self.grasp_pose     = make_pose(pick_xyz[0], pick_xyz[1], self.grasp_height,    *self.top_down_orientation)
 
-    def move_joints(self, joints: list):
-        self.moveit2.move_to_configuration(joint_positions=joints)
+        # 2. Poses for placing the block back down
+        # For this basic lab, the place location is the same as the pick location.
+        # Students will modify these poses to stack the block elsewhere.
+        self.pre_place_pose = self.pre_grasp_pose
+        self.place_pose     = self.grasp_pose
+
+        self.j_home    = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.j_retract = [0.40, 0.02, 2.27, -1.57, -0.84, 1.97]
+        self.touch_links = ["end_effector_link",
+                            "right_finger_bottom_link", "left_finger_bottom_link"]
+
+    # ---- Wrapper Functions for Robot Actions ----
+    def move_to_joints(self, joint_positions):
+        self.moveit2.move_to_configuration(joint_positions=joint_positions)
         self.moveit2.wait_until_executed()
 
-    def move_cartesian_to(self, target_pose: Pose, fraction_ok: float = 0.90):
+    def move_to_pose(self, pose: Pose, cartesian: bool = False) -> bool:
         traj = self.moveit2.plan(
-            pose=target_pose, cartesian=True, max_step=0.005,
-            cartesian_fraction_threshold=fraction_ok,
+            pose=pose,
+            cartesian=cartesian,
+            max_step=0.005,
+            cartesian_fraction_threshold=0.90 if cartesian else None,
         )
         if traj is None:
-            self.get_logger().warn("Cartesian plan rejected. Adjust pose / max_step.")
-            return
+            self.get_logger().error("Planning failed.")
+            return False
         self.moveit2.execute(traj)
         self.moveit2.wait_until_executed()
+        return True
 
     def open_gripper(self):
-        if not self.gripper:
-            self.get_logger().warn("No gripper available; open() skipped.")
-            return
-        self.gripper.open(); self.gripper.wait_until_executed()
+        if not self.gripper: return
+        self.gripper.open()
 
     def close_gripper(self):
-        if not self.gripper:
-            self.get_logger().warn("No gripper available; close() skipped.")
-            return
-        self.gripper.close(); self.gripper.wait_until_executed()
+        if not self.gripper: return
+        self.gripper.close()
 
-    # ==================== Planning Scene helpers ======================
-
-    def add_block(self, obj_id: str, size_xyz: Tuple[float, float, float], pose: Pose):
+    # ---- Scene Management ----
+    def add_scene(self):
+        self.get_logger().info("Adding objects to the planning scene.")
         self.moveit2.add_collision_box(
-            id=obj_id,
-            size=size_xyz,
-            position=(pose.position.x, pose.position.y, pose.position.z),
-            quat_xyzw=(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w),
-            frame_id=self.moveit2.base_link_name,
+            id="table_top",
+            size=(1.0, 1.0, 0.05),
+            position=(0.0, 0.0, self.table_center_z),
+            quat_xyzw=(0,0,0,1),
+            frame_id="base_link",
         )
+        time.sleep(0.1)
+        for i, (x,y,z) in enumerate(self.blocks_xyz, start=1):
+            self.moveit2.add_collision_box(
+                id=f"block_{i}",
+                size=(0.04, 0.04, 0.04),
+                position=(x, y, z),
+                quat_xyzw=(0,0,0,1),
+                frame_id="base_link",
+            )
+            time.sleep(0.05)
+        self.get_logger().info("Planning scene has been set up.")
+
+    # ---- Main Task ----
+    def task_pick_place_one(self):
+        """Execute a simple sequence: pick up a block, lift it, and place it back down."""
+        self.get_logger().info("Starting pick and place task for 'block_1'.")
+
+        # 1. Initial Setup
+        self.move_to_joints(self.j_retract)
+        self.open_gripper()
+        time.sleep(1.0) # Give the gripper time to open
+
+        # 2. Pick Sequence
+        self.get_logger().info("--- PICK SEQUENCE ---")
+        # 2a. Move to a "pre-grasp" pose above the block
+        if not self.move_to_pose(self.pre_grasp_pose): return
+        # 2b. Move straight down to the "grasp" pose
+        if not self.move_to_pose(self.grasp_pose, cartesian=True): return
+
+        # 2c. Close the gripper and attach the object in the planning scene
+        self.get_logger().info("Closing gripper to grasp block...")
+        self.close_gripper()
+        time.sleep(1.0) # Wait for contacts to settle
+        self.moveit2.attach_collision_object("block_1", "end_effector_link", self.touch_links)
         time.sleep(0.2)
 
-    def remove_block(self, obj_id: str):
-        # Safe to call even if it doesn't exist
-        self.moveit2.remove_collision_object(id=obj_id)
-        time.sleep(0.1)
+        # 2d. Move straight up to the "pre-grasp" pose to lift the block
+        if not self.move_to_pose(self.pre_grasp_pose, cartesian=True): return
 
-    def clear_blocks_only(self):
-        """Remove blocks but keep the table."""
-        for oid in ("block_1", "block_2", "block_3"):
-            self.remove_block(oid)
-        self.get_logger().info("Cleared blocks (kept table).")
+        # 3. Place Sequence
+        self.get_logger().info("--- PLACE SEQUENCE ---")
+        # 3a. Move straight down to the "place" pose (which is the same as the grasp pose)
+        if not self.move_to_pose(self.place_pose, cartesian=True): return
 
-    # === §5.4: Add table + three blocks with correct RViz heights ===
-    def add_table_and_blocks(self):
-        # Always start clean so we never duplicate blocks
-        self.clear_blocks_only()
+        # 3b. Open the gripper and detach the object from the planning scene
+        self.open_gripper()
+        time.sleep(1.0) # Wait for the object to release
+        self.moveit2.detach_collision_object("block_1")
+        time.sleep(0.2)
 
-        GAP = 0.001  # 1 mm below base plane
-        TABLE_SIZE = (1.0, 1.0, 0.05)
-        BLOCK_SIZE = (0.04, 0.04, 0.04)
+        # 4. Completion
+        # 4a. Move up away from the placed block
+        _ = self.move_to_pose(self.pre_place_pose, cartesian=True)
+        # 4b. Return to a final retracted pose
+        self.move_to_joints(self.j_retract)
+        self.get_logger().info("Pick and place task completed successfully.")
 
-        # Table center z = -GAP - thickness/2  → top sits just below 0
-        table_center_z = -GAP - (TABLE_SIZE[2] / 2.0)
-        self.add_block("table_top", TABLE_SIZE, make_pose(0.0, 0.0, table_center_z))
-
-        # Blocks: default horizontal layout from Gazebo spawner
-        X = 0.45
-        SPACING = 0.08
-        # Block center z = table top + half cube
-        block_center_z = -GAP + (BLOCK_SIZE[2] / 2.0)
-
-        self.add_block("block_1", BLOCK_SIZE, make_pose(X, -SPACING, block_center_z))
-        self.add_block("block_2", BLOCK_SIZE, make_pose(X,  0.000,  block_center_z))
-        self.add_block("block_3", BLOCK_SIZE, make_pose(X,  SPACING, block_center_z))
-
-        self.get_logger().info("Added Planning Scene: table_top + block_1/2/3.")
-
-    # ==================== Future milestones (stubs) ===================
-
-    def gripper_sanity_check(self):
-        self.get_logger().info("[TODO 5.5] Gripper sanity check placeholder.")
-
-    def attach_block(self, obj_id: str):
-        self.get_logger().info(f"[TODO 5.6] Would ATTACH '{obj_id}' to end_effector_link.")
-
-    def detach_block(self, obj_id: str):
-        self.get_logger().info(f"[TODO 5.6] Would DETACH '{obj_id}'.")
-
-    def pick(self, obj_id: str, pre_grasp: Pose, grasp: Pose):
-        self.get_logger().info(f"[TODO 5.9] pick('{obj_id}') placeholder.")
-
-    def place(self, obj_id: str, pre_place: Pose, place: Pose):
-        self.get_logger().info(f"[TODO 5.10] place('{obj_id}') placeholder.")
-
-    def stack_three(self):
-        self.get_logger().info("[TODO 5.11] stack_three() placeholder.")
-
-    def attach_detach_demo(self, target_id: str = "block_1"):
-        self.get_logger().info(f"[TODO 5.6] attach_detach_demo('{target_id}') placeholder.")
+    # ---- Simple Task Callbacks ----
+    def task_home(self): self.move_to_joints(self.j_home)
+    def task_retract(self): self.move_to_joints(self.j_retract)
+    def task_add_scene(self): self.add_scene()
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = PickAndPlaceNode()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
+    threading.Thread(target=executor.spin, daemon=True).start()
 
-    exec = MultiThreadedExecutor(num_threads=2)
-    exec.add_node(node)
-    threading.Thread(target=exec.spin, daemon=True).start()
-
-    # Read CLI parameters
     task = node.get_parameter("task").get_parameter_value().string_value
-    target_id = node.get_parameter("target_id").get_parameter_value().string_value
-    clear_on_start = node.get_parameter("clear_on_start").get_parameter_value().bool_value
-
-    # Always go HOME at start
-    node.get_logger().info("Moving to home (all joints = 0.0)…")
-    node.move_joints(node.joint_home)
-
-    # Optional: clear blocks at start ONLY if requested
-    if clear_on_start:
-        node.get_logger().info("clear_on_start:=true -> Clearing blocks before task.")
-        node.clear_blocks_only()
-
-    node.get_logger().info(f"Started with task='{task}', target_id='{target_id}'")
+    node.get_logger().info(f"Executing task: '{task}'")
 
     try:
-        if task == "none":
-            node.get_logger().info("No task requested. Node is running.")
-        elif task == "add_scene":
-            node.add_table_and_blocks()  # add_scene clears inside this method
-        elif task == "clear_blocks":
-            node.clear_blocks_only()
-        elif task == "gripper_check":
-            node.gripper_sanity_check()
-        elif task == "attach_detach_demo":
-            node.attach_detach_demo(target_id=target_id)
-        elif task == "stack_three":
-            node.stack_three()
+        if task == "home":             node.task_home()
+        elif task == "retract":        node.task_retract()
+        elif task == "add_scene":      node.task_add_scene()
+        elif task == "pick_place_one": node.task_pick_place_one()
         else:
-            node.get_logger().warn(f"Unknown task '{task}'. Nothing to do.")
+            node.get_logger().warn(f"Unknown task '{task}'. Valid tasks: home, retract, add_scene, pick_place_one")
     finally:
-        time.sleep(0.3)
+        time.sleep(1)
         rclpy.shutdown()
-
 
 
 if __name__ == "__main__":
