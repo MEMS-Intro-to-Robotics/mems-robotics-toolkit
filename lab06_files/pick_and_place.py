@@ -56,6 +56,8 @@ class PickAndPlaceNode(Node):
         # -------------------- Parameters (CLI-controlled) --------------
         self.declare_parameter("task", "none")
         self.declare_parameter("target_id", "block_1")
+        self.declare_parameter("clear_on_start", False)
+
 
         # Joint presets
         self.joint_home = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -166,28 +168,31 @@ def main(args=None):
     rclpy.init(args=args)
     node = PickAndPlaceNode()
 
-    # Keep services responsive while doing one-shot tasks
     exec = MultiThreadedExecutor(num_threads=2)
     exec.add_node(node)
     threading.Thread(target=exec.spin, daemon=True).start()
 
-    # ---- NEW: move to HOME immediately (all zeros) ----
+    # Read CLI parameters
+    task = node.get_parameter("task").get_parameter_value().string_value
+    target_id = node.get_parameter("target_id").get_parameter_value().string_value
+    clear_on_start = node.get_parameter("clear_on_start").get_parameter_value().bool_value
+
+    # Always go HOME at start
     node.get_logger().info("Moving to home (all joints = 0.0)…")
     node.move_joints(node.joint_home)
 
-    # ---- NEW: clear blocks at startup (table kept) ----
-    node.clear_blocks_only()
+    # Optional: clear blocks at start ONLY if requested
+    if clear_on_start:
+        node.get_logger().info("clear_on_start:=true -> Clearing blocks before task.")
+        node.clear_blocks_only()
 
-    # Dispatch tasks
-    task = node.get_parameter("task").get_parameter_value().string_value
-    target_id = node.get_parameter("target_id").get_parameter_value().string_value
     node.get_logger().info(f"Started with task='{task}', target_id='{target_id}'")
 
     try:
         if task == "none":
             node.get_logger().info("No task requested. Node is running.")
         elif task == "add_scene":
-            node.add_table_and_blocks()
+            node.add_table_and_blocks()  # add_scene clears inside this method
         elif task == "clear_blocks":
             node.clear_blocks_only()
         elif task == "gripper_check":
@@ -201,6 +206,7 @@ def main(args=None):
     finally:
         time.sleep(0.3)
         rclpy.shutdown()
+
 
 
 if __name__ == "__main__":
