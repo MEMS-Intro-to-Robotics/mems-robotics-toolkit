@@ -17,15 +17,15 @@ BLOCK_DROP="${BLOCK_DROP:-0.01}"
 BLOCK_MASS="${BLOCK_MASS:-0.02}"       # kg
 BLOCK_DENSITY="${BLOCK_DENSITY:-}"     # kg/m^3; if set, overrides BLOCK_MASS
 
-# >>> Insanely high friction just on the CUBES <<<
-BLOCK_MU="${BLOCK_MU:-50.0}"           # lateral friction 1 (extreme)
-BLOCK_MU2="${BLOCK_MU2:-50.0}"         # lateral friction 2
-BLOCK_TORSION="${BLOCK_TORSION:-20.0}" # torsional friction coefficient
-BLOCK_SLIP1="${BLOCK_SLIP1:-0.0}"      # slip along dir 1
-BLOCK_SLIP2="${BLOCK_SLIP2:-0.0}"      # slip along dir 2
-BLOCK_KP="${BLOCK_KP:-8e5}"            # contact stiffness
-BLOCK_KD="${BLOCK_KD:-2.0}"            # contact damping
-BLOCK_MIN_DEPTH="${BLOCK_MIN_DEPTH:-2e-4}"
+# >>> More realistic friction and contact parameters <<<
+BLOCK_MU="${BLOCK_MU:-2.0}"             # High, but not extreme
+BLOCK_MU2="${BLOCK_MU2:-2.0}"            # High, but not extreme
+BLOCK_TORSION="${BLOCK_TORSION:-0.5}"    # Torsional friction
+BLOCK_SLIP1="${BLOCK_SLIP1:-0.0}"        # Slip
+BLOCK_SLIP2="${BLOCK_SLIP2:-0.0}"        # Slip
+BLOCK_KP="${BLOCK_KP:-1e5}"              # Reduced contact stiffness (100,000)
+BLOCK_KD="${BLOCK_KD:-10.0}"             # Increased damping for stability
+BLOCK_MIN_DEPTH="${BLOCK_MIN_DEPTH:-1e-5}"
 BLOCK_MAX_VEL="${BLOCK_MAX_VEL:-0.10}"
 
 ALLOW_RENAME="${ALLOW_RENAME:-false}"
