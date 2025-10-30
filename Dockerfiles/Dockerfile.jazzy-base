@@ -1,0 +1,77 @@
+# syntax=docker/dockerfile:1.7
+FROM osrf/ros:jazzy-desktop-full
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- Base packages ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    apt-utils build-essential cmake git wget curl nano \
+    python3-pip python3-venv python3-colcon-common-extensions python3-rosdep \
+    terminator net-tools htop tmux gnupg2 lsb-release bash-completion \
+    graphviz vim iputils-ping tree ripgrep fd-find \
+    ros-jazzy-tf2-tools ros-jazzy-tf-transformations ros-jazzy-rqt-tf-tree \
+    ros-jazzy-teleop-twist-keyboard \
+ && ln -s "$(command -v fdfind)" /usr/local/bin/fd || true \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- Gazebo Harmonic + ros_gz ---
+RUN wget -q https://packages.osrfoundation.org/gazebo.gpg -O /usr/share/keyrings/gazebo-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/gazebo-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
+      > /etc/apt/sources.list.d/gazebo-stable.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      gz-harmonic \
+      ros-jazzy-ros-gz ros-jazzy-ros-gz-bridge ros-jazzy-ros-gz-sim \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Python venv for pip deps (optional but you had it) ---
+RUN python3 -m venv /opt/ros_python && \
+    /opt/ros_python/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/ros_python/bin/pip install --no-cache-dir \
+      packaging==25.0 numpy~=2.3 scipy~=1.16 matplotlib~=3.9 \
+      cflib transforms3d pyusb~=1.3 libusb-package~=1.0 \
+      pyyaml catkin_pkg empy lark setuptools importlib_resources
+
+# --- rosdep init ---
+RUN apt-get update && apt-get install -y --no-install-recommends python3-rosdep && \
+    rosdep init || true && rosdep update || true && \
+    rm -rf /var/lib/apt/lists/*
+
+# --- Cursor sizing for WSLg/GTK/Qt apps ---
+ENV XCURSOR_SIZE=24
+
+# --- GTK cursor size defaults for root (container user) ---
+RUN set -eux; \
+    SIZE="${XCURSOR_SIZE:-24}"; \
+    printf 'gtk-cursor-theme-size=%s\n' "$SIZE" > /root/.gtkrc-2.0; \
+    mkdir -p /root/.config/gtk-3.0 /root/.config/gtk-4.0; \
+    printf '[Settings]\ngtk-cursor-theme-size=%s\n' "$SIZE" > /root/.config/gtk-3.0/settings.ini; \
+    cp /root/.config/gtk-3.0/settings.ini /root/.config/gtk-4.0/settings.ini
+
+# --- Ensure login shells pull in .bashrc ---
+RUN printf '%s\n' 'if [ -f ~/.bashrc ]; then . ~/.bashrc; fi' >> /root/.bash_profile
+
+# --- Entry (robust, with login-shell fallback) ---
+RUN printf '%s\n' '#!/usr/bin/env bash' \
+  'set -e' \
+  'set +u; source /opt/ros/jazzy/setup.bash; set -u' \
+  '[ -f "/opt/ros_python/bin/activate" ] && set +u && source /opt/ros_python/bin/activate && set -u || true' \
+  'export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/runtime-root}' \
+  'mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" || true' \
+  'export XCURSOR_SIZE=${XCURSOR_SIZE:-24}' \
+  'if [ ! -s "$HOME/.gtkrc-2.0" ]; then echo "gtk-cursor-theme-size=${XCURSOR_SIZE}" > "$HOME/.gtkrc-2.0"; fi' \
+  'for d in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do' \
+  '  mkdir -p "$d"; f="$d/settings.ini";' \
+  '  if [ ! -s "$f" ]; then printf "[Settings]\ngtk-cursor-theme-size=%s\n" "$XCURSOR_SIZE" > "$f"; fi' \
+  'done' \
+  'if [[ $# -eq 0 ]]; then' \
+  '  if command -v terminator >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then exec terminator -x bash -l; else exec bash -l; fi' \
+  'fi' \
+  'exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+# --- ROS 2 discovery defaults baked into the image (as you had) ---
+ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+ENV ROS_STATIC_PEERS="192.168.0.1;remote.com"
+
+WORKDIR /root/workspaces
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["terminator", "-x", "bash", "-l"]
