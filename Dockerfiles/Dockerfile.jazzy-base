@@ -3,43 +3,48 @@ FROM osrf/ros:jazzy-desktop-full
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# --- Base packages ---
+# --- System & ROS Dependencies Installation ---
+# [CHANGE 1/3]: Added nodejs and npm here (useful for some Jupyter widgets/extensions)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils build-essential cmake git wget curl nano \
     python3-pip python3-venv python3-colcon-common-extensions python3-rosdep \
     terminator net-tools htop tmux gnupg2 lsb-release bash-completion \
     graphviz vim iputils-ping tree ripgrep fd-find \
+    nodejs npm \
     ros-jazzy-tf2-tools ros-jazzy-tf-transformations ros-jazzy-rqt-tf-tree \
     ros-jazzy-teleop-twist-keyboard \
- && ln -s "$(command -v fdfind)" /usr/local/bin/fd || true \
- && rm -rf /var/lib/apt/lists/*
-
-# --- Gazebo Harmonic + ros_gz ---
-RUN wget -q https://packages.osrfoundation.org/gazebo.gpg -O /usr/share/keyrings/gazebo-archive-keyring.gpg && \
+ && \
+    wget -q https://packages.osrfoundation.org/gazebo.gpg -O /usr/share/keyrings/gazebo-archive-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/gazebo-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
       > /etc/apt/sources.list.d/gazebo-stable.list && \
     apt-get update && apt-get install -y --no-install-recommends \
       gz-harmonic \
       ros-jazzy-ros-gz ros-jazzy-ros-gz-bridge ros-jazzy-ros-gz-sim \
-    && rm -rf /var/lib/apt/lists/*
+ && \
+    rosdep init || true && \
+    rosdep update && \
+    ln -s "$(command -v fdfind)" /usr/local/bin/fd || true && \
+    rm -rf /var/lib/apt/lists/*
 
-# --- Python venv for pip deps (optional but you had it) ---
-RUN python3 -m venv /opt/ros_python && \
+# --- Python Virtual Environment ---
+# [CHANGE 2/3]: Added Jupyter packages (jupyterlab, jupyros, etc) and nest_asyncio
+# We use --system-site-packages to ensure the venv can see 'rclpy' installed by apt
+RUN python3 -m venv --system-site-packages /opt/ros_python && \
     /opt/ros_python/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/ros_python/bin/pip install --no-cache-dir \
       packaging==25.0 numpy~=2.3 scipy~=1.16 matplotlib~=3.9 \
       cflib transforms3d pyusb~=1.3 libusb-package~=1.0 \
-      pyyaml catkin_pkg empy lark setuptools importlib_resources
+      pyyaml catkin_pkg empy lark setuptools importlib_resources \
+      # JUPYTER PACKAGES START
+      jupyterlab \
+      ipywidgets \
+      bqplot \
+      jupyros \
+      nest_asyncio
+      # JUPYTER PACKAGES END
 
-# --- rosdep init ---
-RUN apt-get update && apt-get install -y --no-install-recommends python3-rosdep && \
-    rosdep init || true && rosdep update || true && \
-    rm -rf /var/lib/apt/lists/*
-
-# --- Cursor sizing for WSLg/GTK/Qt apps ---
+# --- GUI Application Configuration ---
 ENV XCURSOR_SIZE=24
-
-# --- GTK cursor size defaults for root (container user) ---
 RUN set -eux; \
     SIZE="${XCURSOR_SIZE:-24}"; \
     printf 'gtk-cursor-theme-size=%s\n' "$SIZE" > /root/.gtkrc-2.0; \
@@ -47,30 +52,67 @@ RUN set -eux; \
     printf '[Settings]\ngtk-cursor-theme-size=%s\n' "$SIZE" > /root/.config/gtk-3.0/settings.ini; \
     cp /root/.config/gtk-3.0/settings.ini /root/.config/gtk-4.0/settings.ini
 
-# --- Ensure login shells pull in .bashrc ---
+# --- Jupyter Configuration ---
+# [CHANGE 3/3]: Create a config so students don't need to type flags every time
+# This sets it to listen on all IPs, allow root, and disables the browser launch
+RUN mkdir -p /root/.jupyter && \
+    echo "c.ServerApp.ip = '0.0.0.0'" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.allow_root = True" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.open_browser = False" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.token = ''" >> /root/.jupyter/jupyter_lab_config.py && \
+    echo "c.ServerApp.password = ''" >> /root/.jupyter/jupyter_lab_config.py
+# WARNING: The lines above disable security (token/password). 
+# Since this runs locally in a VM lab, this removes friction for students. 
+# If exposed to the open internet, remove the token/password lines.
+
+# --- Shell Configuration ---
 RUN printf '%s\n' 'if [ -f ~/.bashrc ]; then . ~/.bashrc; fi' >> /root/.bash_profile
 
-# --- Entry (robust, with login-shell fallback) ---
+# --- Entrypoint Script ---
+# This robust script sources all necessary environments (ROS, Python venv),
+# configures runtime settings, starts Jupyter in a hidden tmux session,
+# and provides a sensible default command.
 RUN printf '%s\n' '#!/usr/bin/env bash' \
   'set -e' \
+  '# Source ROS 2 and the Python virtual environment' \
   'set +u; source /opt/ros/jazzy/setup.bash; set -u' \
   '[ -f "/opt/ros_python/bin/activate" ] && set +u && source /opt/ros_python/bin/activate && set -u || true' \
+  '# Ensure XDG_RUNTIME_DIR is set for GUI applications' \
   'export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/runtime-root}' \
   'mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR" || true' \
+  '# Ensure cursor size is set at runtime' \
   'export XCURSOR_SIZE=${XCURSOR_SIZE:-24}' \
   'if [ ! -s "$HOME/.gtkrc-2.0" ]; then echo "gtk-cursor-theme-size=${XCURSOR_SIZE}" > "$HOME/.gtkrc-2.0"; fi' \
   'for d in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do' \
   '  mkdir -p "$d"; f="$d/settings.ini";' \
   '  if [ ! -s "$f" ]; then printf "[Settings]\ngtk-cursor-theme-size=%s\n" "$XCURSOR_SIZE" > "$f"; fi' \
   'done' \
+  '' \
+  '# --- JUPYTER AUTO-START (Background Tmux Session) ---' \
+  '# This starts Jupyter Lab in a detached tmux session named "jupyter_server"' \
+  '# It runs silently in the background so the main terminal remains usable.' \
+  'if command -v tmux >/dev/null 2>&1 && command -v jupyter >/dev/null 2>&1; then' \
+  '  # Check if session already exists to prevent duplicates' \
+  '  if ! tmux has-session -t jupyter_server 2>/dev/null; then' \
+  '    # Start tmux detached (-d), naming the session (-s)' \
+  '    # We explicitly source the venv again inside tmux to ensure PATH is correct' \
+  '    tmux new-session -d -s jupyter_server "source /opt/ros_python/bin/activate && jupyter lab"' \
+  '    echo " [INFO] Jupyter Lab started in background (tmux session: jupyter_server)"' \
+  '  fi' \
+  'fi' \
+  '' \
+  '# If no command is provided, launch terminator (if GUI available) or a login shell' \
   'if [[ $# -eq 0 ]]; then' \
   '  if command -v terminator >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then exec terminator -x bash -l; else exec bash -l; fi' \
   'fi' \
+  '# Otherwise, execute the command passed to the container' \
   'exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
 
-# --- ROS 2 discovery defaults baked into the image (as you had) ---
 ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ENV ROS_STATIC_PEERS="192.168.0.1;remote.com"
+
+# Expose Jupyter port
+EXPOSE 8888
 
 WORKDIR /root/workspaces
 ENTRYPOINT ["/entrypoint.sh"]
