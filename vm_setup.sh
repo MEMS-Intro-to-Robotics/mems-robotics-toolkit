@@ -135,6 +135,38 @@ else
 fi
 
 # -----------------------------
+# GitHub CLI
+# -----------------------------
+say "Installing GitHub CLI (gh)"
+wait_for_dpkg_lock
+sudo install -d -m 0755 /etc/apt/keyrings
+wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+  | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+wait_for_dpkg_lock
+sudo apt-get update -y
+sudo apt-get install -y gh
+
+# -----------------------------
+# Python test tooling
+# -----------------------------
+# Ubuntu 24.04 marks the system Python as externally managed (PEP 668), so
+# "python3 -m pip install pytest" fails without a virtual environment. The apt
+# package gives students a working "pytest" command with no extra steps.
+say "Installing Python test tooling"
+wait_for_dpkg_lock
+sudo apt-get install -y python3-pytest
+if ! command -v pytest >/dev/null 2>&1; then
+  if command -v pytest-3 >/dev/null 2>&1; then
+    sudo ln -sf "$(command -v pytest-3)" /usr/local/bin/pytest
+  else
+    warn "python3-pytest installed but no pytest command is on PATH."
+  fi
+fi
+
+# -----------------------------
 # Command-line practice files
 # -----------------------------
 say "Creating sample files for command line practice"
@@ -145,7 +177,6 @@ echo "This is a simulated program output."
 SH
 chmod +x "${HOME}/cli_practice/myprog"
 echo "This is a sample text file for command line practice." > "${HOME}/cli_practice/file.txt"
-touch "${HOME}/cli_practice/sample1.txt" "${HOME}/cli_practice/sample2.txt"
 
 # -----------------------------
 # FastX 4 (Legacy / Backup Access)
@@ -165,6 +196,31 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
 sudo mkdir -p /var/fastx/license
 sudo chown -R fastx:fastx /var/fastx || true
 rm -rf "${HOME}/.cache/sessions" || true
+
+# Activate the FastX license without prompting. The activate helper has no
+# documented command-line flags, so the key and seat count are supplied on
+# stdin. Activation is verified by checking that a license file was written.
+say "Activating FastX 4"
+if [ -n "${FASTX_ACTIVATION_KEY:-}" ]; then
+  if [ -x /usr/lib/fastx/4/install/activate ]; then
+    printf '%s\n%s\n' "${FASTX_ACTIVATION_KEY}" "${FASTX_SEATS:-1}" \
+      | sudo -u fastx /usr/lib/fastx/4/install/activate || \
+      warn "FastX activate helper returned a non-zero status."
+  else
+    warn "FastX activate helper not found at /usr/lib/fastx/4/install/activate."
+  fi
+  if [ -n "$(sudo ls -A /var/fastx/license 2>/dev/null)" ]; then
+    say "FastX license installed"
+  else
+    warn "No license file in /var/fastx/license. Activate manually with:"
+    warn "  sudo -u fastx /usr/lib/fastx/4/install/activate"
+    warn "  key: ${FASTX_ACTIVATION_KEY}   seats: ${FASTX_SEATS:-1}"
+  fi
+else
+  warn "FASTX_ACTIVATION_KEY is not set, so FastX was not activated."
+  warn "Re-run with FASTX_ACTIVATION_KEY=\"<key>\" ./vm_setup.sh, or activate"
+  warn "manually with: sudo -u fastx /usr/lib/fastx/4/install/activate"
+fi
 
 # -----------------------------
 # NVIDIA Container Toolkit

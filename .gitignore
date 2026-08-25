@@ -24,3 +24,5 @@ build/
 # Other generated files
 # Ignoring other temporary or generated files.
 *.DS_Store
+# Local editor/agent config
+.claude/
