@@ -51,6 +51,7 @@ mems-robotics-toolkit/
 ├── lab07_files/             # Lab 7: 3D Goal Controller starter code
 ├── dockerfiles/             # Dockerfile sources for course images
 ├── vm_setup.sh              # VM environment setup script
+├── move_docker_to_home.sh   # Move Docker storage from the 25 GB root volume to /home
 └── gpu_install.sh           # NVIDIA GPU setup (optional)
 ```
 
