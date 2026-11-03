@@ -32,11 +32,11 @@ for d in docker containerd; do
 done
 
 sudo systemctl daemon-reload
-sudo mount /var/lib/containerd
-sudo mount /var/lib/docker
+mountpoint -q /var/lib/containerd || sudo mount /var/lib/containerd
+mountpoint -q /var/lib/docker || sudo mount /var/lib/docker
 sudo systemctl start containerd docker
 
-docker info --format 'Docker root: {{.DockerRootDir}}'
+sudo docker info --format 'Docker root: {{.DockerRootDir}}'  # sudo: docker group membership added by vm_setup.sh does not apply to the current session
 findmnt --target /var/lib/docker
 findmnt --target /var/lib/containerd
 df -h / /home

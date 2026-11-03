@@ -67,6 +67,11 @@ sudo systemctl enable --now docker
 # Add current user to docker group (non-fatal if already added)
 sudo usermod -aG docker "$USER" || true
 
+# Move Docker storage from the VM's 25 GB root volume to /home (68 GB).
+# The script skips storage locations that are already mounted.
+say "Moving Docker storage to /home"
+curl -fsSL https://raw.githubusercontent.com/MEMS-Intro-to-Robotics/mems-robotics-toolkit/main/move_docker_to_home.sh | bash
+
 # -----------------------------
 # Firefox (non-snap via PPA, with pinning)
 # -----------------------------
